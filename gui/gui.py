@@ -1,18 +1,13 @@
 # Graphical User Interface (GUI) for playing chess
 # Written by Rutuparn Pawar [InputBlackBoxOutput]
-
-import tkinter
+import tkinter as tk
 from tkinter import *
 import tkinter.messagebox as msgbox
-
-import platform
 from stockfish import Stockfish
 import chess
-from socket_server import ChessSocketServer
-import asyncio
 import threading
-import socketio
-
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import json
 # -------------------------------------------------------------------------------------------
 # Unicode for chess pieces
 # white king	  ♔   U+2654
@@ -59,7 +54,20 @@ btn_map = {
 # ----------------------------------------------------------------------------------
 
 
-class GUI(Tk):
+class MoveHandler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        content_length = int(self.headers['Content-Length'])
+        post_data = self.rfile.read(content_length)
+        move_data = json.loads(post_data.decode('utf-8'))
+        move = move_data.get('move')
+        
+        if move:
+            self.server.gui.receive_opponent_move(move)
+        
+        self.send_response(200)
+        self.end_headers()
+
+class GUI(tk.Tk):
     def __init__(self, width, height):
         super().__init__()
 
@@ -71,12 +79,27 @@ class GUI(Tk):
         self.game_over = False
 
         self.bot = Stockfish(r"stockfish/stockfish_13_win_x64_bmi2.exe")
-        self.socket_server = ChessSocketServer()
-        server_thread = threading.Thread(target=asyncio.run, args=(self.socket_server.start_server(),))
-        server_thread.daemon = True
-        server_thread.start()
-        self.check_computer_move()
 
+        # Start HTTP server in a separate thread
+        self.start_http_server()
+
+    def start_http_server(self):
+        def run_server():
+            server_address = ('', 8000)
+            httpd = HTTPServer(server_address, MoveHandler)
+            httpd.gui = self
+            print("Starting HTTP server on port 8000")
+            httpd.serve_forever()
+
+        thread = threading.Thread(target=run_server)
+        thread.daemon = True
+        thread.start()
+
+    def receive_opponent_move(self, move):
+        print(f"Received opponent move: {move}")
+        self.bot.make_moves_from_current_position([move])
+        self.mark_move(move)
+        self.update_board()
     # -------------------------------------------------------------------------------
     # Menu bar
 
@@ -263,22 +286,7 @@ class GUI(Tk):
                     return
 
                 # Computers turn
-                best_move = self.bot.get_best_move()
-                print(f"C: {best_move}\n")
-
-                self.bot.make_moves_from_current_position([best_move])
-                self.mark_move(best_move)
-                self.update_board()
-
-                # End game condition check
-                c = self.check_endgame_conditions()
-                if c == 'Check':
-                    self.status.config(text=c)
-                elif c == 'Checkmate':
-                    self.game_over = True
-                    self.status.config(text=c)
-                    return
-
+                self.check_for_opponent_move()
             else:
                 self.usr_move += c + str(r)
 
@@ -305,37 +313,26 @@ class GUI(Tk):
         for i in range(64):
             self.b_list[i].configure(text=unicode_map[board_state[i]])
 
-    def check_computer_move(self):
-        """Check for computer move from the server."""
-        if self.socket_server.computer_move:
-            move = self.socket_server.computer_move
-            print("move", move);
-            self.socket_server.computer_move = None
+    def check_for_opponent_move(self):
+        try:
+            move = self.move_queue.get_nowait()
+            print("Move received", move)
             self.bot.make_moves_from_current_position([move])
             self.mark_move(move)
             self.update_board()
-            self.check_endgame_conditions()
-        self.after(1000, self.check_computer_move)  # Check every second
-
+        except Queue.Empty:
+            pass
+        self.after(100, self.check_for_opponent_move)
 
 # -------------------------------------------------------------------------------------------
+
 if __name__ == '__main__':
     print("Please minimize this window")
-    os_name = platform.system().lower()
-
-    if 'windows' in os_name:
-        window = GUI(740, 680)
-    else:
-        window = GUI(700, 680)
+    window = GUI(740, 680)
 
     window.create_menu_bar()
     window.create_status_bar()
-
-    if 'windows' in os_name:
-        window.create_chess_board(18, 6, 2)
-    else:
-        window.create_chess_board(18, 4, 2)
+    window.create_chess_board(18, 6, 2)
 
     window.mainloop()
-
 # -------------------------------------------------------------------------------------------
