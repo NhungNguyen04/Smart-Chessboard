@@ -8,6 +8,10 @@ import tkinter.messagebox as msgbox
 import platform
 from stockfish import Stockfish
 import chess
+from socket_server import ChessSocketServer
+import asyncio
+import threading
+import socketio
 
 # -------------------------------------------------------------------------------------------
 # Unicode for chess pieces
@@ -67,6 +71,11 @@ class GUI(Tk):
         self.game_over = False
 
         self.bot = Stockfish(r"stockfish/stockfish_13_win_x64_bmi2.exe")
+        self.socket_server = ChessSocketServer()
+        server_thread = threading.Thread(target=asyncio.run, args=(self.socket_server.start_server(),))
+        server_thread.daemon = True
+        server_thread.start()
+        self.check_computer_move()
 
     # -------------------------------------------------------------------------------
     # Menu bar
@@ -295,6 +304,18 @@ class GUI(Tk):
 
         for i in range(64):
             self.b_list[i].configure(text=unicode_map[board_state[i]])
+
+    def check_computer_move(self):
+        """Check for computer move from the server."""
+        if self.socket_server.computer_move:
+            move = self.socket_server.computer_move
+            print("move", move);
+            self.socket_server.computer_move = None
+            self.bot.make_moves_from_current_position([move])
+            self.mark_move(move)
+            self.update_board()
+            self.check_endgame_conditions()
+        self.after(1000, self.check_computer_move)  # Check every second
 
 
 # -------------------------------------------------------------------------------------------
